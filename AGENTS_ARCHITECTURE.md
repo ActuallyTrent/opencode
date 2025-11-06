@@ -119,6 +119,60 @@ Removes old tool call outputs while preserving:
 - Tool call structure for history
 - Essential context for continuation
 
+### Automatic Continuation Mechanisms
+
+The system has **three** mechanisms that trigger automatic continuation:
+
+#### 1. Tool-Call Loop (`packages/opencode/src/session/prompt.ts:412-420`)
+
+When the model's finish reason is `"tool-calls"`, the execution loop automatically continues:
+
+```typescript
+if (!result.blocked && !result.info.error) {
+  if ((await stream.finishReason) === "tool-calls") {
+    continue  // Loop back and send tool results to model
+  }
+}
+```
+
+#### 2. Queued Messages
+
+If there are unprocessed messages in the queue, the loop continues automatically.
+
+#### 3. Context Compaction
+
+When context overflow is detected (~80% capacity), messages are summarized and a "resume from where you left off" message is injected.
+
+### Finish Reasons and Continuation
+
+The model can stop for different reasons. **Only `"tool-calls"` triggers automatic continuation**:
+
+| Finish Reason | Behavior | Automatic Continue? |
+|--------------|----------|-------------------|
+| `"tool-calls"` | Model wants to use tools | ✅ **Yes** - Loop continues |
+| `"end_turn"` | Normal completion | ❌ No - Agent stops |
+| `"max_tokens"` | Hit output token limit | ❌ No - Agent stops |
+| `"stop_sequence"` | Hit stop sequence | ❌ No - Agent stops |
+| `"length"` | Hit length limit | ❌ No - Agent stops |
+
+**Important**: If the model stops due to output limits (`max_tokens`, `length`), the system does **not** inject a "please continue" prompt. The agent simply returns the result and stops. The user must send another message to continue work.
+
+### Error Retry Mechanism (`packages/opencode/src/session/retry.ts`)
+
+For API errors (network failures, rate limits), the system retries with exponential backoff:
+
+```typescript
+// Retry configuration
+RETRY_INITIAL_DELAY = 2000ms
+RETRY_BACKOFF_FACTOR = 2
+```
+
+Honors `retry-after` headers from providers:
+- `retry-after-ms`: Milliseconds to wait
+- `retry-after`: Seconds or date to wait
+
+Retries occur automatically up to `chatMaxRetries` (default: 3) times before surfacing the error to the user.
+
 ## Agent Execution Flow
 
 ### Main Execution Loop (`packages/opencode/src/session/prompt.ts`)
